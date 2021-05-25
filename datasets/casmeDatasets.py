@@ -184,3 +184,4 @@ def readData(filePath):
     faces = faces.tolist()
     emotions = emotions.tolist()
     return faces, emotions
+
