@@ -1,13 +1,14 @@
 import os
+
+import cv2
 import numpy as np
 import pandas as pd
 from numpy import random
-from utils.dataExpansion import faceFlip
-from utils.faceExtraction import faceExtraction
+from utils.faceDealer import faceListDeal, faceListDealNew, faceListDealOF, faceListDealApex
 from utils.frameNormalized import frameNormalized
 
-# 表情类型 disgust = 1; sadness = 1; surprise = 2; repression = 1; happiness = 0; anger  =1; others = 3;
-# happiness => positive; disgust, sadness, anger, repression, contempt => negative; surprise => surprise; others => others
+# 表情类型 disgust = 1; sadness = 1; surprise = 2; happiness = 0; anger  =1; others = 3;
+# happiness => positive; disgust, sadness, anger, contempt => negative; surprise => surprise; others => others
 EMOTIONSDict = {"Disgust": 1, "Sadness": 1, "Surprise": 2, "Anger": 1, "Happiness": 0, "Fear": 1, "Other": 3,
                 "Contempt": 1}
 # 数据集文件位置
@@ -15,14 +16,29 @@ dataset_root = "/Users/returnyg/Datasets/SAMM_dataset/SAMM"
 datasetXls = "/Users/returnyg/Datasets/SAMM_dataset/SAMM/SAMM_Micro_FACS_Codes_v2.xlsx"
 
 
-def load_SAMM_data():
-    if os.listdir("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save").count(
+# LOO表示是否将在预处理时区分开不同受试者的样本，framenum代表取样帧数, needAlignment代表是否对齐, needFaceMask代表是否增加面部遮罩,
+# needEyeMask代表是否增加眼部遮罩, OF=代表是否提取光流特征, Apexonly=代表是否仅提取处理顶点帧
+def load_SAMM_data(LOO=False, framenum=30, needAlignment=False, needFaceMask=False, needEyeMask=True, OF=False, Apexonly=False):
+    if os.listdir("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/old").count(
             "SAMMfaces.npy") > 0 and \
-            os.listdir("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save").count(
-                "SAMMemotions.npy") > 0:
-        print("Loading the SAMM data!")
-        faces, emotions = readData("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save")
+            os.listdir("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/old").count(
+                "SAMMemotions.npy") > 0 and LOO is False and OF is False and Apexonly is False:
+        print("Loading the oldSAMM data!")
+        faces, emotions = readData("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/old")
         return faces, emotions
+    if os.listdir("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/new").count(
+            str(framenum)+"-SAMMdata.npy") > 0 and LOO and OF is False and Apexonly is False:
+        print("Loading the new SAMM data!")
+        subFaceEmo = readNewData("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/new", framenum=framenum)
+        return subFaceEmo
+    if os.listdir("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/new").count("OF-SAMMdata.npy") > 0 and LOO is False and OF and Apexonly is False:
+        print("Loading the OF SAMM data!")
+        subFaceEmo = readOFData("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/new")
+        return subFaceEmo
+    if os.listdir("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/new").count("Apex-SAMMdata.npy") > 0 and LOO is False and OF is False and Apexonly:
+        print("Loading the Apex SAMM data!")
+        subFaceEmo = readApexData("/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/new")
+        return subFaceEmo
     dataFolderDict = {}  # 字典形式存放数据集信息，内容为{文件名：文件路径}
     sampleList = []  # 嵌套列表形式存放样本信息，内容为[[主体编号, 样本文件夹名, 样本文件夹路径, 表情类型], []...]
     # 遍历文件夹，读取文件夹下所有受试者文件夹
@@ -46,6 +62,9 @@ def load_SAMM_data():
                 # 个别样本未标记情绪类型，弃用该样本
                 print(subject + ":" + sample + " Emotion is Null")
             else:
+                if str(dataFrame.iloc[[0], [9]].values[0][0]) == 'Other':
+                    print("其他样本不算入内")
+                    continue
                 innerList.insert(0, str(subject))
                 innerList.append(EMOTIONSDict[str(dataFrame.iloc[[0], [9]].values[0][0])])
                 innerList.append(dataFrame.iloc[[0], [3]].values[0][0])  # OnsetFrame
@@ -54,15 +73,20 @@ def load_SAMM_data():
                 print(str(innerList[0]) + " - " + str(innerList[1]) + " - " + str(innerList[2]) + " - " + str(
                     innerList[3]) + " - " + str(innerList[4]) + " - " + str(innerList[5]) + " - " + str(innerList[6]))
                 sampleList.append(innerList)
-    print("样本总体数量为：" + str(len(sampleList)) + " 个")
-    width = 224
-    height = 224
+    print("样本文件夹数量为：" + str(len(sampleList)) + " 个")
+    width = 256
+    height = 256
+    subFaceEmo = []
+    innerlist = []
+    innerFaceList = []
+    innerEmoList = []
     faces = []
     emotions = []
+    sampleNum = sampleList[0][0]
     i = 1
+    j = 0
     for sample in sampleList:
         # 从list中获取人脸的数据
-        innerface = []
         faceSubject = sample[0]
         faceFolder = sample[1]
         faceFileLoc = sample[2]
@@ -77,22 +101,95 @@ def load_SAMM_data():
             fileList.remove(".DS_Store")
         fileList.sort(key=lambda x: int(x.split('.jpg')[0].split('_')[1]), reverse=False)
         print(fileList)
-        fileList = frameNormalized(fileList, onsetFrame, offsetFrame, apexFrame)
+        fileList = frameNormalized(fileList, onsetFrame, offsetFrame, apexFrame, framenum=framenum)
         print(fileList)
-        innerface = faceExtraction(fileList, faceFileLoc, width, height)
-        innerfaceflip = faceFlip(innerface)
-        faces.append(innerface)
-        emotions.append(faceEmotion)
-        faces.append(innerfaceflip)
-        emotions.append(faceEmotion)
+        if LOO and OF is False and Apexonly is False:
+            print("正在使用新方法处理")
+            if faceSubject != sampleNum:
+                innerlist.append(sampleNum)
+                innerlist.append(list(innerFaceList))
+                innerlist.append(list(innerEmoList))
+                subFaceEmo.append(list(innerlist))
+                print("当前采样人为" + str(faceSubject) + "...subFaceEmo的长度为" + str(len(subFaceEmo)) + "...采样人是" + str(
+                    subFaceEmo[j][0]) + "...面部列表长度为" + str(len(subFaceEmo[j][1])) + "...情绪列表长度为" + str(
+                    len(subFaceEmo[j][2])) + "..单个面部有" + str(len(subFaceEmo[j][1][0])) + "...单个表情有" + str(
+                    len(subFaceEmo[j][2][0])))
+                for q in range(len(subFaceEmo)):
+                    print("第{}个受试者，编号为{}，共有{}个表情样本，每个表情样本有{}个，共有{}个情绪标签，每个情绪标签有{}个。".format(
+                        q + 1, subFaceEmo[q][0], len(subFaceEmo[q][1]), len(subFaceEmo[q][1][0]), len(subFaceEmo[q][2]),
+                        len(subFaceEmo[q][2][0])))
+                j = j + 1
+                sampleNum = faceSubject
+                innerlist.clear()
+                innerFaceList.clear()
+                innerEmoList.clear()
+            innerFaceList, innerEmoList = faceListDealNew(fileList, innerFaceList, innerEmoList, faceEmotion, faceFileLoc, width, height, needAlignment, needFaceMask, needEyeMask, framenum=framenum)
+        elif LOO is False and OF and Apexonly is False:
+            print("正在使用新方法处理")
+            innerFaceList, innerEmoList = faceListDealOF(fileList, faceFileLoc, width, height, innerFaceList,
+                                                         innerEmoList, faceEmotion)
+            for b, lists in enumerate(innerFaceList):
+                if len(lists) < 1:
+                    innerFaceList.pop(b)
+            if innerFaceList and innerEmoList:
+                innerlist.append(list(innerFaceList))
+                innerlist.append(list(innerEmoList))
+            if innerlist:
+                subFaceEmo.append(list(innerlist))
+            innerlist.clear()
+            innerFaceList.clear()
+            innerEmoList.clear()
+        elif LOO is False and OF is False and Apexonly:
+            print("正在使用Apex方法处理")
+            innerFace, innerEmo = faceListDealApex(fileList, faceFileLoc, width, height, faceEmotion, int(len(fileList) / 2))
+            if isinstance(innerFace, list) and isinstance(innerEmo, list):
+                for face, emo in zip(innerFace, innerEmo):
+                    innerFaceList.append(face)
+                    innerEmoList.append(emo)
+            else:
+                innerFaceList.append(innerFace)
+                innerEmoList.append(innerEmo)
+            print(f"数据集共有{len(innerFaceList)}个表情，{len(innerEmoList)}个标签")
+        elif LOO is False and OF is False and Apexonly is False:
+            faces, emotions = faceListDeal(faces, emotions, faceEmotion, fileList, faceFileLoc, width, height)
+
         i = i + 1
-    print("samm面部" + str(len(faces)))
-    print("samm情绪" + str(len(emotions)))
-    faces = np.asarray(faces)
-    emotions = np.asarray(emotions)
-    np.save('/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/SAMMfaces.npy', faces)
-    np.save('/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/SAMMemotions.npy', emotions)
-    return faces, emotions
+        print("######################################################")
+    if innerFaceList and LOO:
+        innerlist.append(sampleList[-1][0])
+        innerlist.append(innerFaceList)
+        innerlist.append(innerEmoList)
+        subFaceEmo.append(innerlist)
+        print("...subFaceEmo的长度为" + str(len(subFaceEmo)) + "...采样人是" + str(subFaceEmo[j][0]) + "...面部列表长度为" + str(
+            len(subFaceEmo[j][1])) + "...情绪列表长度为" + str(
+            len(subFaceEmo[j][2])))
+    if LOO and OF is False and Apexonly is False:
+        print("样本人总数为：" + str(len(subFaceEmo)))
+        subFaceEmo = np.asarray(subFaceEmo)
+        print(subFaceEmo)
+        np.save('/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/new/'+str(framenum)+'-SAMMdata.npy', subFaceEmo)
+        return subFaceEmo
+    if LOO is False and OF and Apexonly is False:
+        print("样本人总数为：" + str(len(subFaceEmo)))
+        subFaceEmo = np.asarray(subFaceEmo)
+        print(subFaceEmo)
+        np.save('/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/new/OF-SAMMdata.npy', subFaceEmo)
+        return subFaceEmo
+    if LOO is False and OF is False and Apexonly:
+        subFaceEmo.append(innerFaceList)
+        subFaceEmo.append(innerEmoList)
+        print(f"处理完毕，数据集共有{len(subFaceEmo[0])}个表情，{len(subFaceEmo[1])}个标签")
+        subFaceEmo = np.asarray(subFaceEmo)
+        np.save('/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/new/Apex-SAMMdata.npy', subFaceEmo)
+        return subFaceEmo
+    else:
+        print("SAMM面部数量" + str(len(faces)))
+        print("SAMM情绪标签数量" + str(len(emotions)))
+        faces = np.asarray(faces)
+        emotions = np.asarray(emotions)
+        np.save('/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/old/SAMMfaces.npy', faces)
+        np.save('/Users/returnyg/PycharmProjects/MicroExpressionRecognition/data_save/old/SAMMemotions.npy', emotions)
+        return faces, emotions
 
 
 def input_SAMM_data():
@@ -155,4 +252,24 @@ def readData(filePath):
     return faces, emotions
 
 
-t1, t2 = load_SAMM_data()
+def readNewData(filePath, framenum=30):
+    subFaceEmo = np.load(filePath + '/' + str(framenum) + '-SAMMdata.npy', allow_pickle=True)
+    subFaceEmo = subFaceEmo.tolist()
+    return subFaceEmo
+
+
+def readOFData(filePath):
+    subFaceEmo = np.load(filePath + '/' + 'OF-SAMMdata.npy', allow_pickle=True)
+    subFaceEmo = subFaceEmo.tolist()
+    return subFaceEmo
+
+
+def readApexData(filePath):
+    subFaceEmo = np.load(filePath + '/' + 'Apex-SAMMdata.npy', allow_pickle=True)
+    subFaceEmo = subFaceEmo.tolist()
+    return subFaceEmo
+
+
+# t1 = load_SAMM_data(LOO=True, framenum=30)
+# t1 = load_SAMM_data(LOO=False, framenum=150, OF=True)
+t1 = load_SAMM_data(LOO=False, framenum=31, OF=False, Apexonly=True)
