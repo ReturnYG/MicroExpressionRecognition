@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 import pandas as pd
 from numpy import random
-from tensorflow.python.framework import dtypes, random_seed
 
 # 表情类型 disgust = 1; sadness = 2; surprise = 3; repression = 4; happiness = 5; tense  =6; fear = 7; contempt = 8;
 EMOTIONSDict = {"disgust": 1, "sadness": 2, "surprise": 3, "repression": 4, "happiness": 5, "tense": 6, "fear": 7,
@@ -173,8 +172,6 @@ def input_CASME_data():
             test_emotions_list.append(emotion)
     test_faces_list = np.expand_dims(test_faces_list, -1)
 
-    print(len(train_faces_list))
-    print(len(test_faces_list))
     return train_faces_list, train_emotions_list, test_faces_list, test_emotions_list
 
 
