@@ -140,9 +140,8 @@ def trainMyModel_Custom(dataset, datasetName, learning_rate, framenum=30):
     # 计算损失
     def loss(model, x, y):
         y_ = model(x)
-        # y_pred = tf.clip_by_value(y_, 10e-8, 1.-10e-8)
-        y_new = generate_result(y_, y)
-        return loss_fuc(y_true=y, y_pred=y_), y_new
+        y_pred = tf.clip_by_value(y_, 10e-8, 1.-10e-8)
+        return loss_fuc(y_true=y, y_pred=y_), y_pred
 
     # 计算梯度
     def grad(model, inputs, targets):
