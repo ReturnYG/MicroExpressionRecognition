@@ -17,7 +17,6 @@ from utils.batchSizeFix import batchFuc
 from sklearn.metrics import confusion_matrix
 
 # 读取数据集
-from utils.build_result import generate_result
 from utils.dataPreparation import dataPraparation, flatten
 from utils.sampleBalance import sample_balance
 
